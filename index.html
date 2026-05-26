@@ -34,7 +34,7 @@
             </button>
             <button class="entry-button income" type="button" data-open-form="income">
               <span>收入</span>
-              <strong id="monthIncomeQuick">¥0.00</strong>
+              <strong id="todayIncomeQuick">¥0.00</strong>
             </button>
           </div>
 
@@ -89,13 +89,24 @@
             <div><span>总支出</span><strong id="totalExpense">¥0.00</strong></div>
             <div><span>本月收入</span><strong id="monthIncome">¥0.00</strong></div>
             <div><span>本月支出</span><strong id="monthExpense">¥0.00</strong></div>
+            <div><span>今日收入</span><strong id="todayIncome">¥0.00</strong></div>
             <div><span>今日支出</span><strong id="todayExpense">¥0.00</strong></div>
           </div>
 
           <section class="chart-section">
-            <h3>支出分类</h3>
+            <div class="chart-head">
+              <h3>支出分类</h3>
+              <div class="segment-control" id="piePeriodControl" aria-label="支出分类周期">
+                <button class="is-selected" type="button" data-pie-period="day">日</button>
+                <button type="button" data-pie-period="week">周</button>
+                <button type="button" data-pie-period="month">月</button>
+                <button type="button" data-pie-period="year">年</button>
+              </div>
+            </div>
+            <p class="chart-note" id="pieRangeLabel"></p>
             <canvas id="pieChart" width="320" height="220"></canvas>
             <div class="legend" id="pieLegend"></div>
+            <div class="category-detail" id="pieDetail">点一下颜色，看这个分类花了多少钱。</div>
           </section>
 
           <section class="chart-section">
@@ -108,6 +119,12 @@
           <div class="records-head">
             <h2 id="recordsTitle" class="section-title">记录</h2>
             <input id="monthFilter" type="month" aria-label="选择月份" />
+          </div>
+          <div class="filter-panel">
+            <input id="searchInput" type="search" placeholder="搜索名称或分类" autocomplete="off" />
+            <select id="categoryFilter" aria-label="按分类查看">
+              <option value="">全部分类</option>
+            </select>
           </div>
           <div class="record-list" id="recordList"></div>
         </section>

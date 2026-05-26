@@ -12,6 +12,9 @@ const state = {
   view: "home",
   selectedCategory: "",
   deleteId: "",
+  piePeriod: "day",
+  pieSlices: [],
+  selectedPieCategory: "",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -30,10 +33,13 @@ const els = {
   recentList: $("#recentList"),
   recordList: $("#recordList"),
   monthFilter: $("#monthFilter"),
+  searchInput: $("#searchInput"),
+  categoryFilter: $("#categoryFilter"),
+  pieRangeLabel: $("#pieRangeLabel"),
+  pieDetail: $("#pieDetail"),
   backupStatus: $("#backupStatus"),
   importJsonInput: $("#importJsonInput"),
   confirmDialog: $("#confirmDialog"),
-  confirmText: $("#confirmText"),
 };
 
 function loadRecords() {
@@ -57,21 +63,38 @@ function money(value) {
   }).format(Number(value || 0));
 }
 
+function pad(value) {
+  return String(value).padStart(2, "0");
+}
+
 function toDateTimeLocal(date = new Date()) {
-  const copy = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return copy.toISOString().slice(0, 16);
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function monthKey(date = new Date()) {
-  return toDateTimeLocal(date).slice(0, 7);
+function toDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function dayKey(date = new Date()) {
-  return toDateTimeLocal(date).slice(0, 10);
+function toMonthKey(date = new Date()) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
 }
 
-function formatDateTime(iso) {
-  const date = new Date(iso);
+function parseRecordDate(recordOrValue) {
+  const value = typeof recordOrValue === "string" ? recordOrValue : recordOrValue?.datetime;
+  if (!value) return new Date();
+  return new Date(value);
+}
+
+function recordDayKey(record) {
+  return toDateKey(parseRecordDate(record));
+}
+
+function recordMonthKey(record) {
+  return toMonthKey(parseRecordDate(record));
+}
+
+function formatDateTime(value) {
+  const date = parseRecordDate(value);
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
     day: "2-digit",
@@ -80,20 +103,70 @@ function formatDateTime(iso) {
   }).format(date);
 }
 
+function formatDate(value) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(value);
+}
+
 function uid() {
   return `${Date.now()}-${crypto.getRandomValues(new Uint32Array(1))[0]}`;
 }
 
 function sum(records, type) {
-  return records.filter((record) => record.type === type).reduce((total, record) => total + Number(record.amount), 0);
+  return records.filter((record) => record.type === type).reduce((total, record) => total + Number(record.amount || 0), 0);
 }
 
 function getMonthRecords(month) {
-  return state.records.filter((record) => record.datetime.slice(0, 7) === month);
+  return state.records.filter((record) => recordMonthKey(record) === month);
+}
+
+function getPeriodRange(period) {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+
+  if (period === "week") {
+    const day = start.getDay() || 7;
+    start.setDate(start.getDate() - day + 1);
+    end.setDate(start.getDate() + 7);
+  } else if (period === "month") {
+    start.setDate(1);
+    end.setMonth(start.getMonth() + 1, 1);
+  } else if (period === "year") {
+    start.setMonth(0, 1);
+    end.setFullYear(start.getFullYear() + 1, 0, 1);
+  } else {
+    end.setDate(start.getDate() + 1);
+  }
+
+  return { start, end };
+}
+
+function periodLabel(period, start, end) {
+  if (period === "day") return `今天 ${formatDate(start)}`;
+  if (period === "week") {
+    const last = new Date(end);
+    last.setDate(last.getDate() - 1);
+    return `本周 ${formatDate(start)} - ${formatDate(last)}`;
+  }
+  if (period === "month") return `本月 ${start.getFullYear()}-${pad(start.getMonth() + 1)}`;
+  return `今年 ${start.getFullYear()}`;
+}
+
+function getExpenseRecordsForPeriod(period) {
+  const { start, end } = getPeriodRange(period);
+  const records = state.records.filter((record) => {
+    const date = parseRecordDate(record);
+    return record.type === "expense" && date >= start && date < end;
+  });
+  return { records, start, end };
 }
 
 function sortedRecords(records = state.records) {
-  return [...records].sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
+  return [...records].sort((a, b) => parseRecordDate(b) - parseRecordDate(a));
 }
 
 function setView(view) {
@@ -108,7 +181,7 @@ function openForm(type, record = null) {
   els.formTitle.textContent = record ? "编辑记录" : type === "expense" ? "记支出" : "记收入";
   els.recordId.value = record?.id || "";
   els.recordType.value = type;
-  els.recordDateTime.value = record ? toDateTimeLocal(new Date(record.datetime)) : toDateTimeLocal();
+  els.recordDateTime.value = record ? toDateTimeLocal(parseRecordDate(record)) : toDateTimeLocal();
   els.recordName.value = record?.name || "";
   els.recordAmount.value = record?.amount || "";
   renderCategories(type);
@@ -126,6 +199,15 @@ function renderCategories(type) {
       `,
     )
     .join("");
+}
+
+function renderCategoryFilter() {
+  const selected = els.categoryFilter.value;
+  const options = [...categories.expense, ...categories.income]
+    .map((category) => `<option value="${category}">${category}</option>`)
+    .join("");
+  els.categoryFilter.innerHTML = `<option value="">全部分类</option>${options}`;
+  els.categoryFilter.value = selected;
 }
 
 function renderRecordList(container, records, emptyText) {
@@ -156,15 +238,15 @@ function renderRecordList(container, records, emptyText) {
 }
 
 function renderStats() {
-  const now = new Date();
-  const currentMonth = monthKey(now);
-  const today = dayKey(now);
+  const currentMonth = toMonthKey();
+  const today = toDateKey();
   const monthRecords = getMonthRecords(currentMonth);
-  const todayRecords = state.records.filter((record) => record.datetime.slice(0, 10) === today);
+  const todayRecords = state.records.filter((record) => recordDayKey(record) === today);
   const totalIncome = sum(state.records, "income");
   const totalExpense = sum(state.records, "expense");
   const monthIncome = sum(monthRecords, "income");
   const monthExpense = sum(monthRecords, "expense");
+  const todayIncome = sum(todayRecords, "income");
   const todayExpense = sum(todayRecords, "expense");
 
   $("#balanceValue").textContent = money(totalIncome - totalExpense);
@@ -172,9 +254,10 @@ function renderStats() {
   $("#totalExpense").textContent = money(totalExpense);
   $("#monthIncome").textContent = money(monthIncome);
   $("#monthExpense").textContent = money(monthExpense);
+  $("#todayIncome").textContent = money(todayIncome);
   $("#todayExpense").textContent = money(todayExpense);
   $("#todayExpenseQuick").textContent = money(todayExpense);
-  $("#monthIncomeQuick").textContent = money(monthIncome);
+  $("#todayIncomeQuick").textContent = money(todayIncome);
 
   drawPieChart();
   drawTrendChart();
@@ -183,38 +266,88 @@ function renderStats() {
 function drawPieChart() {
   const canvas = $("#pieChart");
   const ctx = canvas.getContext("2d");
-  const data = categories.expense.map((category) => ({
+  const { records, start, end } = getExpenseRecordsForPeriod(state.piePeriod);
+  const data = categories.expense.map((category, index) => ({
     category,
-    value: sum(state.records.filter((record) => record.category === category), "expense"),
+    color: chartColors[index],
+    value: sum(records.filter((record) => record.category === category), "expense"),
   }));
   const total = data.reduce((amount, item) => amount + item.value, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  state.pieSlices = [];
+  els.pieRangeLabel.textContent = periodLabel(state.piePeriod, start, end);
 
   if (!total) {
-    drawEmptyChart(ctx, canvas, "还没有支出");
+    drawEmptyChart(ctx, canvas, "这个周期还没有支出");
     $("#pieLegend").innerHTML = "";
+    els.pieDetail.textContent = "点一下颜色，看这个分类花了多少钱。";
     return;
   }
 
   const centerX = canvas.width / 2;
   const centerY = 104;
   const radius = 76;
-  let start = -Math.PI / 2;
-  data.forEach((item, index) => {
+  let startAngle = -Math.PI / 2;
+  data.forEach((item) => {
+    if (!item.value) return;
     const angle = (item.value / total) * Math.PI * 2;
+    const endAngle = startAngle + angle;
     ctx.beginPath();
     ctx.moveTo(centerX, centerY);
-    ctx.arc(centerX, centerY, radius, start, start + angle);
+    ctx.arc(centerX, centerY, radius, startAngle, endAngle);
     ctx.closePath();
-    ctx.fillStyle = chartColors[index];
+    ctx.fillStyle = item.color;
     ctx.fill();
-    start += angle;
+    state.pieSlices.push({ ...item, startAngle, endAngle, centerX, centerY, radius, total });
+    startAngle = endAngle;
   });
 
   $("#pieLegend").innerHTML = data
     .filter((item) => item.value > 0)
-    .map((item, index) => `<span><i style="background:${chartColors[index]}"></i>${item.category} ${Math.round((item.value / total) * 100)}%</span>`)
+    .map(
+      (item) => `
+        <button type="button" data-pie-category="${item.category}">
+          <i style="background:${item.color}"></i>${item.category} ${Math.round((item.value / total) * 100)}%
+        </button>
+      `,
+    )
     .join("");
+
+  if (state.selectedPieCategory) {
+    showPieDetail(state.selectedPieCategory);
+  }
+}
+
+function showPieDetail(category) {
+  const slice = state.pieSlices.find((item) => item.category === category);
+  state.selectedPieCategory = slice ? category : "";
+  if (!slice) {
+    els.pieDetail.textContent = "点一下颜色，看这个分类花了多少钱。";
+    return;
+  }
+  els.pieDetail.textContent = `${category}：${money(slice.value)}，占 ${Math.round((slice.value / slice.total) * 100)}%`;
+}
+
+function pickPieSlice(event) {
+  const canvas = event.currentTarget;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const x = (event.clientX - rect.left) * scaleX;
+  const y = (event.clientY - rect.top) * scaleY;
+
+  for (const slice of state.pieSlices) {
+    const dx = x - slice.centerX;
+    const dy = y - slice.centerY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance > slice.radius) continue;
+    let angle = Math.atan2(dy, dx);
+    if (angle < -Math.PI / 2) angle += Math.PI * 2;
+    if (angle >= slice.startAngle && angle <= slice.endAngle) {
+      showPieDetail(slice.category);
+      return;
+    }
+  }
 }
 
 function drawTrendChart() {
@@ -223,11 +356,11 @@ function drawTrendChart() {
   const days = Array.from({ length: 7 }, (_, index) => {
     const date = new Date();
     date.setDate(date.getDate() - (6 - index));
-    const key = dayKey(date);
+    const key = toDateKey(date);
     return {
       key,
       label: `${date.getMonth() + 1}/${date.getDate()}`,
-      value: sum(state.records.filter((record) => record.type === "expense" && record.datetime.slice(0, 10) === key), "expense"),
+      value: sum(state.records.filter((record) => record.type === "expense" && recordDayKey(record) === key), "expense"),
     };
   });
   const max = Math.max(...days.map((item) => item.value), 0);
@@ -285,10 +418,23 @@ function drawEmptyChart(ctx, canvas, text) {
   ctx.fillText(text, canvas.width / 2, canvas.height / 2);
 }
 
+function getFilteredRecords() {
+  const activeMonth = els.monthFilter.value || toMonthKey();
+  const keyword = els.searchInput.value.trim().toLowerCase();
+  const category = els.categoryFilter.value;
+
+  return getMonthRecords(activeMonth).filter((record) => {
+    const text = `${record.name} ${record.category} ${record.type} ${record.amount}`.toLowerCase();
+    const matchesKeyword = !keyword || text.includes(keyword);
+    const matchesCategory = !category || record.category === category;
+    return matchesKeyword && matchesCategory;
+  });
+}
+
 function renderRecords() {
-  const activeMonth = els.monthFilter.value || monthKey();
+  const activeMonth = els.monthFilter.value || toMonthKey();
   els.monthFilter.value = activeMonth;
-  renderRecordList(els.recordList, sortedRecords(getMonthRecords(activeMonth)), "这个月还没有记录。");
+  renderRecordList(els.recordList, sortedRecords(getFilteredRecords()), "没有找到符合条件的记录。");
   renderRecordList(els.recentList, sortedRecords().slice(0, 5), "还没有记录，先记一笔。");
 }
 
@@ -298,6 +444,7 @@ function render() {
     day: "numeric",
     weekday: "long",
   }).format(new Date());
+  renderCategoryFilter();
   renderStats();
   renderRecords();
 }
@@ -311,7 +458,7 @@ function upsertRecord(event) {
     category: state.selectedCategory,
     name: els.recordName.value.trim(),
     amount: Number(els.recordAmount.value),
-    datetime: new Date(els.recordDateTime.value).toISOString(),
+    datetime: els.recordDateTime.value,
     updatedAt: new Date().toISOString(),
   };
 
@@ -341,7 +488,7 @@ function download(filename, content, type) {
 }
 
 function exportJson() {
-  const stamp = dayKey();
+  const stamp = toDateKey();
   download(`只记一笔-${stamp}.json`, JSON.stringify(state.records, null, 2), "application/json");
 }
 
@@ -350,7 +497,7 @@ function exportCsv() {
   const rows = state.records.map((record) =>
     header.map((key) => `"${String(record[key] ?? "").replaceAll('"', '""')}"`).join(","),
   );
-  download(`只记一笔-${dayKey()}.csv`, [header.join(","), ...rows].join("\n"), "text/csv;charset=utf-8");
+  download(`只记一笔-${toDateKey()}.csv`, [header.join(","), ...rows].join("\n"), "text/csv;charset=utf-8");
 }
 
 async function importJson(file) {
@@ -390,8 +537,26 @@ function bindEvents() {
     renderCategories(els.recordType.value);
   });
 
+  $("#piePeriodControl").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pie-period]");
+    if (!button) return;
+    state.piePeriod = button.dataset.piePeriod;
+    state.selectedPieCategory = "";
+    $$("[data-pie-period]").forEach((item) => item.classList.toggle("is-selected", item === button));
+    drawPieChart();
+  });
+
+  $("#pieChart").addEventListener("click", pickPieSlice);
+
+  $("#pieLegend").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pie-category]");
+    if (button) showPieDetail(button.dataset.pieCategory);
+  });
+
   els.form.addEventListener("submit", upsertRecord);
   els.monthFilter.addEventListener("change", renderRecords);
+  els.searchInput.addEventListener("input", renderRecords);
+  els.categoryFilter.addEventListener("change", renderRecords);
 
   document.addEventListener("click", (event) => {
     const editButton = event.target.closest("[data-edit]");
@@ -428,7 +593,7 @@ async function registerServiceWorker() {
   try {
     await navigator.serviceWorker.register("./service-worker.js");
   } catch {
-    // 本地 file:// 打开时不会注册，使用 localhost 或部署后即可。
+    // file:// 打开时不会注册，使用 localhost 或部署后即可。
   }
 }
 
